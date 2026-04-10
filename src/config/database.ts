@@ -3,6 +3,10 @@
  * Supabase PostgreSQL connection pool
  */
 
+import dns from 'dns';
+// Force IPv4 to avoid ENETUNREACH on servers without IPv6 support
+dns.setDefaultResultOrder('ipv4first');
+
 import postgres from 'postgres';
 
 let pool: postgres.Sql | null = null;
