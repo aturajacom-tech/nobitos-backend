@@ -1,73 +1,67 @@
 /**
- * Stock Service
- * Stock management with Supabase PostgreSQL
+ * Stock Service — Supabase client version
  */
 
 import { getDatabase } from '../config/database';
 import { CurrentStock, StockLedger, APIError, PaginationParams } from '../types';
 
-export async function getCurrentStock(organizationId: string): Promise<CurrentStock[]> {
+export async function getCurrentStock(organizationId: string): Promise<any[]> {
   const db = getDatabase();
 
-  const stock = await db`
-    SELECT cs.id, cs.organization_id, cs.item_id, cs.quantity, cs.updated_at,
-           i.sku, i.name as item_name, i.unit, i.item_type, i.item_condition
-    FROM current_stock cs
-    JOIN items i ON cs.item_id = i.id
-    WHERE cs.organization_id = ${organizationId}
-    ORDER BY i.name ASC
-  `;
+  const { data, error } = await db
+    .from('current_stock')
+    .select(`
+      id, organization_id, item_id, quantity, updated_at,
+      items (sku, name, unit, item_type, item_condition)
+    `)
+    .eq('organization_id', organizationId)
+    .order('updated_at', { ascending: false });
 
-  return stock as any[];
+  if (error) throw new APIError(500, 'DB_ERROR', error.message);
+  return data || [];
 }
 
-export async function getStockHistory(organizationId: string, params: PaginationParams): Promise<{ items: StockLedger[], total: number }> {
+export async function getStockHistory(organizationId: string, params: PaginationParams): Promise<{ items: any[], total: number }> {
   const db = getDatabase();
 
-  const [countResult] = await db`
-    SELECT COUNT(*)::int as total
-    FROM stock_ledger
-    WHERE organization_id = ${organizationId}
-  `;
+  const { count } = await db
+    .from('stock_ledger')
+    .select('id', { count: 'exact', head: true })
+    .eq('organization_id', organizationId);
 
-  const items = await db`
-    SELECT sl.id, sl.organization_id, sl.item_id, sl.transaction_type,
-           sl.quantity, sl.reference_id, sl.reference_type,
-           sl.recorded_by, sl.notes, sl.created_at,
-           i.name as item_name, i.sku, i.unit,
-           u.full_name as recorded_by_name
-    FROM stock_ledger sl
-    JOIN items i ON sl.item_id = i.id
-    LEFT JOIN users u ON sl.recorded_by = u.id
-    WHERE sl.organization_id = ${organizationId}
-    ORDER BY sl.created_at DESC
-    LIMIT ${params.per_page}
-    OFFSET ${params.offset}
-  `;
+  const { data, error } = await db
+    .from('stock_ledger')
+    .select(`
+      id, organization_id, item_id, transaction_type,
+      quantity, reference_id, reference_type, recorded_by, notes, created_at,
+      items (name, sku, unit),
+      users (full_name)
+    `)
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false })
+    .range(params.offset, params.offset + params.per_page - 1);
 
-  return {
-    items: items as unknown as StockLedger[],
-    total: countResult.total
-  };
+  if (error) throw new APIError(500, 'DB_ERROR', error.message);
+  return { items: data || [], total: count || 0 };
 }
 
-export async function getItemStockHistory(itemId: string, organizationId: string): Promise<StockLedger[]> {
+export async function getItemStockHistory(itemId: string, organizationId: string): Promise<any[]> {
   const db = getDatabase();
 
-  const history = await db`
-    SELECT sl.id, sl.organization_id, sl.item_id, sl.transaction_type,
-           sl.quantity, sl.reference_id, sl.reference_type,
-           sl.recorded_by, sl.notes, sl.created_at,
-           u.full_name as recorded_by_name
-    FROM stock_ledger sl
-    LEFT JOIN users u ON sl.recorded_by = u.id
-    WHERE sl.item_id = ${itemId}
-      AND sl.organization_id = ${organizationId}
-    ORDER BY sl.created_at DESC
-    LIMIT 100
-  `;
+  const { data, error } = await db
+    .from('stock_ledger')
+    .select(`
+      id, organization_id, item_id, transaction_type,
+      quantity, reference_id, reference_type, recorded_by, notes, created_at,
+      users (full_name)
+    `)
+    .eq('item_id', itemId)
+    .eq('organization_id', organizationId)
+    .order('created_at', { ascending: false })
+    .limit(100);
 
-  return history as unknown as StockLedger[];
+  if (error) throw new APIError(500, 'DB_ERROR', error.message);
+  return data || [];
 }
 
 export async function recordStockMovement(
@@ -82,28 +76,45 @@ export async function recordStockMovement(
   const db = getDatabase();
 
   // Insert ledger entry
-  await db`
-    INSERT INTO stock_ledger (organization_id, item_id, transaction_type, quantity, reference_id, recorded_by, notes)
-    VALUES (${organizationId}, ${itemId}, ${transactionType}, ${quantity}, ${referenceId || null}, ${recordedBy}, ${notes || null})
-  `;
+  await db.from('stock_ledger').insert({
+    organization_id: organizationId,
+    item_id: itemId,
+    transaction_type: transactionType,
+    quantity,
+    reference_id: referenceId || null,
+    recorded_by: recordedBy,
+    notes: notes || null
+  });
 
-  // Update current_stock (upsert)
-  await db`
-    INSERT INTO current_stock (organization_id, item_id, quantity)
-    VALUES (${organizationId}, ${itemId}, ${quantity})
-    ON CONFLICT (organization_id, item_id)
-    DO UPDATE SET
-      quantity = current_stock.quantity + ${quantity},
-      updated_at = NOW()
-  `;
+  // Upsert current_stock
+  const { data: existing } = await db
+    .from('current_stock')
+    .select('id, quantity')
+    .eq('organization_id', organizationId)
+    .eq('item_id', itemId)
+    .single();
+
+  if (existing) {
+    await db
+      .from('current_stock')
+      .update({ quantity: existing.quantity + quantity })
+      .eq('id', existing.id);
+  } else {
+    await db.from('current_stock').insert({
+      organization_id: organizationId,
+      item_id: itemId,
+      quantity
+    });
+  }
 }
 
 export async function getStockLevel(organizationId: string, itemId: string): Promise<number> {
   const db = getDatabase();
-  const result = await db`
-    SELECT quantity FROM current_stock
-    WHERE organization_id = ${organizationId} AND item_id = ${itemId}
-    LIMIT 1
-  `;
-  return result.length > 0 ? result[0].quantity : 0;
+  const { data } = await db
+    .from('current_stock')
+    .select('quantity')
+    .eq('organization_id', organizationId)
+    .eq('item_id', itemId)
+    .single();
+  return data?.quantity || 0;
 }

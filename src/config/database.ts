@@ -1,81 +1,49 @@
 /**
  * Database Configuration
- * Supabase PostgreSQL connection pool
+ * Supabase client using HTTPS (port 443) — works on any server
  */
 
-import dns from 'dns';
-// Force IPv4 to avoid ENETUNREACH on servers without IPv6 support
-dns.setDefaultResultOrder('ipv4first');
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-import postgres from 'postgres';
+let supabase: SupabaseClient | null = null;
 
-let pool: postgres.Sql | null = null;
-
-export async function initializeDatabase(): Promise<postgres.Sql> {
-  if (pool) {
-    return pool;
+export async function initializeDatabase(): Promise<SupabaseClient> {
+  if (supabase) {
+    return supabase;
   }
 
-  const connectionString = process.env.DATABASE_URL ||
-    `postgresql://postgres:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT || 5432}/${process.env.DB_NAME || 'postgres'}`;
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  try {
-    pool = postgres(connectionString, {
-      ssl: 'require'
-    });
-
-    // Test connection
-    await pool`SELECT 1 as test`;
-    console.log('✅ Database connection verified');
-
-    return pool;
-  } catch (error) {
-    console.error('❌ Database connection failed:', error);
-    throw error;
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required');
   }
+
+  supabase = createClient(supabaseUrl, supabaseKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    }
+  });
+
+  // Test connection
+  const { error } = await supabase.from('organizations').select('id').limit(1);
+  if (error) {
+    throw new Error(`Database connection test failed: ${error.message}`);
+  }
+
+  console.log('✅ Database connection verified (Supabase HTTPS)');
+  return supabase;
 }
 
-export function getDatabase(): postgres.Sql {
-  if (!pool) {
+export function getDatabase(): SupabaseClient {
+  if (!supabase) {
     throw new Error('Database not initialized. Call initializeDatabase() first.');
   }
-  return pool;
+  return supabase;
 }
 
 export async function closeDatabase(): Promise<void> {
-  if (pool) {
-    try {
-      await pool.end();
-    } catch (error) {
-      console.error('Error closing database:', error);
-    }
-    pool = null;
-    console.log('✅ Database connection closed');
-  }
-}
-
-// Utility functions for queries
-// Note: This is a placeholder for raw SQL execution
-// The postgres library uses tagged template literals for queries
-// These functions are here for compatibility with existing code patterns
-
-export async function query(text: string, params?: any[]): Promise<any[]> {
-  const db = getDatabase();
-  try {
-    // For now, we'll throw an error instructing to use postgres template literals
-    throw new Error('Use postgres library template literals: db`SELECT * FROM table WHERE id = ${id}`');
-  } catch (error: unknown) {
-    console.error('Database query error:', error);
-    throw error;
-  }
-}
-
-export async function queryOne(text: string, params?: any[]): Promise<any> {
-  // Placeholder
-  return null;
-}
-
-export async function queryMany(text: string, params?: any[]): Promise<any[]> {
-  // Placeholder
-  return [];
+  supabase = null;
+  console.log('✅ Database connection closed');
 }

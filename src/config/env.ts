@@ -1,16 +1,15 @@
 /**
  * Environment Configuration
- * Validate and load environment variables
  */
 
 import dotenv from 'dotenv';
-
 dotenv.config();
 
 interface EnvConfig {
   NODE_ENV: string;
   PORT: number;
-  DATABASE_URL: string;
+  SUPABASE_URL: string;
+  SUPABASE_SERVICE_ROLE_KEY: string;
   JWT_SECRET: string;
   JWT_EXPIRY: string;
   CORS_ORIGIN: string;
@@ -27,19 +26,18 @@ function getEnv(key: string, defaultValue?: string): string {
 export const config: EnvConfig = {
   NODE_ENV: getEnv('NODE_ENV', 'development'),
   PORT: parseInt(getEnv('PORT', '5000')),
-  DATABASE_URL: getEnv('DATABASE_URL'),
+  SUPABASE_URL: getEnv('SUPABASE_URL'),
+  SUPABASE_SERVICE_ROLE_KEY: getEnv('SUPABASE_SERVICE_ROLE_KEY'),
   JWT_SECRET: getEnv('JWT_SECRET', 'dev-secret-key'),
   JWT_EXPIRY: getEnv('JWT_EXPIRY', '24h'),
   CORS_ORIGIN: getEnv('CORS_ORIGIN', '*')
 };
 
 export function validateConfig(): void {
-  const required = ['DATABASE_URL'];
+  const required = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'];
   const missing = required.filter(key => !process.env[key]);
-
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   }
-
   console.log('✅ Environment configuration validated');
 }

@@ -1,6 +1,5 @@
 /**
- * Authentication Service
- * User registration, login using Supabase PostgreSQL
+ * Authentication Service — Supabase client version
  */
 
 import bcryptjs from 'bcryptjs';
@@ -26,33 +25,42 @@ export async function registerUser(req: RegisterRequest): Promise<AuthResponse> 
   if (!req.email || !req.password || !req.full_name) {
     throw new APIError(400, 'INVALID_INPUT', 'Email, password, and full_name are required');
   }
-
   if (req.password.length < 8) {
     throw new APIError(400, 'WEAK_PASSWORD', 'Password must be at least 8 characters');
   }
 
   const db = getDatabase();
 
-  // Check if email already exists
-  const existing = await db`SELECT id FROM users WHERE email = ${req.email} LIMIT 1`;
-  if (existing.length > 0) {
+  // Check email uniqueness
+  const { data: existing } = await db.from('users').select('id').eq('email', req.email).limit(1);
+  if (existing && existing.length > 0) {
     throw new APIError(409, 'EMAIL_EXISTS', 'Email already registered');
+  }
+
+  // Resolve organization
+  let organizationId = req.organization_id;
+  if (!organizationId) {
+    const { data: orgs } = await db.from('organizations').select('id').eq('type', 'gudang_pusat').limit(1);
+    organizationId = orgs && orgs.length > 0 ? orgs[0].id : null;
   }
 
   const passwordHash = await hashPassword(req.password);
 
-  // Use provided organization_id or find default organization
-  let organizationId = req.organization_id;
-  if (!organizationId) {
-    const defaultOrg = await db`SELECT id FROM organizations WHERE type = 'gudang_pusat' LIMIT 1`;
-    organizationId = defaultOrg.length > 0 ? defaultOrg[0].id : null;
-  }
+  const { data: newUser, error } = await db
+    .from('users')
+    .insert({
+      email: req.email,
+      password_hash: passwordHash,
+      full_name: req.full_name,
+      role: req.role || RoleType.GUDANG_PUSAT,
+      organization_id: organizationId
+    })
+    .select('id, email, full_name, role, organization_id, created_at')
+    .single();
 
-  const [newUser] = await db`
-    INSERT INTO users (email, password_hash, full_name, role, organization_id)
-    VALUES (${req.email}, ${passwordHash}, ${req.full_name}, ${req.role || RoleType.GUDANG_PUSAT}, ${organizationId})
-    RETURNING id, email, full_name, role, organization_id, created_at
-  `;
+  if (error || !newUser) {
+    throw new APIError(500, 'REGISTRATION_ERROR', error?.message || 'Registration failed');
+  }
 
   return {
     user_id: newUser.id,
@@ -71,19 +79,18 @@ export async function loginUser(req: LoginRequest): Promise<AuthResponse> {
 
   const db = getDatabase();
 
-  const users = await db`
-    SELECT id, email, full_name, role, organization_id, password_hash
-    FROM users
-    WHERE email = ${req.email}
-    LIMIT 1
-  `;
+  const { data: users, error } = await db
+    .from('users')
+    .select('id, email, full_name, role, organization_id, password_hash')
+    .eq('email', req.email)
+    .limit(1);
 
-  if (users.length === 0) {
+  if (error) throw new APIError(500, 'DB_ERROR', error.message);
+  if (!users || users.length === 0) {
     throw new APIError(401, 'INVALID_CREDENTIALS', 'Invalid email or password');
   }
 
   const user = users[0];
-
   const passwordValid = await comparePassword(req.password, user.password_hash);
   if (!passwordValid) {
     throw new APIError(401, 'INVALID_CREDENTIALS', 'Invalid email or password');
@@ -110,24 +117,16 @@ export async function loginUser(req: LoginRequest): Promise<AuthResponse> {
   };
 }
 
-export async function logoutUser(userId: string): Promise<void> {
-  // JWT-based auth — logout handled client-side; this is for audit purposes only
+export async function logoutUser(_userId: string): Promise<void> {
+  // JWT-based — client removes token
 }
 
 export async function getUserById(userId: string): Promise<User | null> {
   const db = getDatabase();
-  const users = await db`
-    SELECT id, email, full_name, role, organization_id, created_at, updated_at
-    FROM users WHERE id = ${userId} LIMIT 1
-  `;
-  return users.length > 0 ? (users[0] as User) : null;
-}
-
-export async function getUserByEmail(email: string): Promise<User | null> {
-  const db = getDatabase();
-  const users = await db`
-    SELECT id, email, full_name, role, organization_id, created_at, updated_at
-    FROM users WHERE email = ${email} LIMIT 1
-  `;
-  return users.length > 0 ? (users[0] as User) : null;
+  const { data } = await db
+    .from('users')
+    .select('id, email, full_name, role, organization_id, created_at, updated_at')
+    .eq('id', userId)
+    .single();
+  return data as User | null;
 }

@@ -1,49 +1,68 @@
 /**
- * Handover Service
- * Handover with PIN verification for stock receipt
+ * Handover Service — Supabase client version
  */
 
-import { HandoverPin, CreateHandoverRequest, APIError } from '../types';
+import { getDatabase } from '../config/database';
+import { CreateHandoverRequest, APIError } from '../types';
 
 function generateRandomPin(): string {
-  // Generate 6-digit PIN
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-export async function createHandover(req: CreateHandoverRequest): Promise<{ handover_id: string, sender_pin: string, receiver_pin: string }> {
-  // TODO: Validate delivery exists
-  // TODO: Validate sender_id and receiver_id
-  // TODO: Insert into handover_pins table
-
+export async function createHandover(req: CreateHandoverRequest): Promise<{ handover_id: string; sender_pin: string; receiver_pin: string }> {
   if (!req.delivery_id || !req.receiver_id) {
     throw new APIError(400, 'INVALID_INPUT', 'Missing required handover fields');
   }
 
+  const db = getDatabase();
+
   const sendPin = generateRandomPin();
   const receivePin = generateRandomPin();
 
+  const { data: handover, error } = await db
+    .from('handover_pins')
+    .insert({
+      delivery_id: req.delivery_id,
+      sender_pin: sendPin,
+      receiver_pin: receivePin,
+      receiver_id: req.receiver_id
+    })
+    .select('id')
+    .single();
+
+  if (error || !handover) {
+    throw new APIError(500, 'CREATE_HANDOVER_ERROR', error?.message || 'Failed to create handover');
+  }
+
   return {
-    handover_id: 'handover-id',
+    handover_id: handover.id,
     sender_pin: sendPin,
     receiver_pin: receivePin
   };
 }
 
-export async function verifyHandoverPin(
-  handoverId: string,
-  pin: string,
-  verifiedBy: 'sender' | 'receiver'
-): Promise<void> {
-  // TODO: Query handover_pins table
-  // TODO: Compare pin with stored pin
-  // TODO: Update sender_verified_at or receiver_verified_at
-  // TODO: If both verified, complete handover and update delivery status
-  // TODO: Record in audit_logs
+export async function verifyHandoverPin(handoverId: string, pin: string, verifiedBy: 'sender' | 'receiver'): Promise<void> {
+  const db = getDatabase();
 
-  throw new APIError(500, 'NOT_IMPLEMENTED', 'Verify PIN not yet implemented');
+  const { data: handover } = await db
+    .from('handover_pins')
+    .select('id, sender_pin, receiver_pin, sender_verified_at, receiver_verified_at')
+    .eq('id', handoverId)
+    .single();
+
+  if (!handover) throw new APIError(404, 'NOT_FOUND', 'Handover not found');
+
+  if (verifiedBy === 'sender') {
+    if (handover.sender_pin !== pin) throw new APIError(400, 'INVALID_PIN', 'Incorrect sender PIN');
+    await db.from('handover_pins').update({ sender_verified_at: new Date().toISOString() }).eq('id', handoverId);
+  } else {
+    if (handover.receiver_pin !== pin) throw new APIError(400, 'INVALID_PIN', 'Incorrect receiver PIN');
+    await db.from('handover_pins').update({ receiver_verified_at: new Date().toISOString() }).eq('id', handoverId);
+  }
 }
 
-export async function getHandoverStatus(handoverId: string): Promise<HandoverPin | null> {
-  // TODO: Query handover_pins table
-  return null;
+export async function getHandoverStatus(handoverId: string): Promise<any> {
+  const db = getDatabase();
+  const { data } = await db.from('handover_pins').select('*').eq('id', handoverId).single();
+  return data;
 }
